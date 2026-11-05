@@ -93,19 +93,22 @@ const keyHead = book.tabs.key.data[0];
 assert.ok(!book.tabs.key.data.flat().includes("must-not-be-used"), "_work must be skipped");
 assert.strictEqual(book.tabs.key.data[1][keyHead.indexOf("fps_exact")], "25/1");
 
-book.tabs.annotators.data.push(["Test Person", "secret1"], ["Second", ""], ["", "orphan"]);
-vm.runInContext("makeCodes()", ctx);
-assert.strictEqual(book.tabs.annotators.data[2][1], "abcdef1234");
-assert.match(post({op: "session", code: "wrong"}).error, /not valid/);
-assert.match(post({op: "session", code: ""}).error, /access code/);
-assert.match(post({op: "session", code: "orphan"}).error, /not valid/);
+const CODE = "PASTE_ACCESS_CODE_HERE";
+assert.match(post({op: "session", name: "Test Person", code: "wrong"}).error, /not valid/);
+assert.match(post({op: "session", name: "Test Person", code: ""}).error, /not valid/);
+assert.match(post({op: "session", name: "  =!! ", code: CODE}).error, /Enter your name/);
+assert.match(post({op: "session", code: CODE}).error, /Enter your name/);
+assert.strictEqual(book.tabs.sessions.data.length, 1, "refused requests must not create a session");
 
-let s = post({op: "session", code: "secret1"});
+let s = post({op: "session", name: "Test Person", code: CODE});
 assert.deepStrictEqual([s.annotator, s.total, s.done, s.position], ["Test Person", 20, 0, 0]);
 assert.strictEqual(s.drive_key, "PASTE_API_KEY_HERE");
-assert.strictEqual(post({op: "session", code: "wrong"}).drive_key, undefined, "no key without a valid code");
+assert.strictEqual(post({op: "session", name: "Test Person", code: "wrong"}).drive_key, undefined, "no key without a valid code");
+assert.strictEqual(post({op: "session", name: "test  person", code: CODE}).annotator, "Test Person", "capitals and spacing resume the same session");
+assert.strictEqual(post({op: "session", name: "=נסי אבו-ק", code: CODE}).annotator, "נסי אבו-ק", "non-Latin names are kept, formula characters are not");
+book.tabs.sessions.data.pop();
 assert.strictEqual(book.tabs.sessions.data.length, 2);
-assert.strictEqual(post({op: "session", code: "secret1"}).total, 20);
+assert.strictEqual(post({op: "session", name: "Test Person", code: CODE}).total, 20);
 assert.strictEqual(book.tabs.sessions.data.length, 2, "the same annotator must keep one session");
 
 // Queue: every clip twice, once per version, in separate halves and at least a third of the clips apart.
@@ -118,19 +121,19 @@ items.forEach((it, i) => {
 });
 
 // The page never receives anything that identifies the clip or version.
-const it0 = post({op: "item", code: "secret1", i: 0});
+const it0 = post({op: "item", name: "Test Person", code: CODE, i: 0});
 for (const k of ["clip_id", "version", "original_path", "synthesized_path", "c", "v"]) assert.ok(!(k in it0));
 assert.ok(!JSON.stringify(it0).match(/D:|\/000|_synthesized/));
 assert.deepStrictEqual(it0.actions, ["A", "B"]);
 assert.match(it0.file_id, /^id-[AB]\d-[os]$/);
 assert.strictEqual(it0.n_frames, items[0].v === "o" ? 100 : 250);
-assert.match(post({op: "item", code: "secret1", i: 20}).error, /No such/);
+assert.match(post({op: "item", name: "Test Person", code: CODE, i: 20}).error, /No such/);
 
 // Marks: validation, seconds, label cleaning, upsert into one row per clip.
-assert.match(post({op: "mark", code: "secret1", i: 0, frame: null, flag: ""}).error, /Bad mark/);
-assert.match(post({op: "mark", code: "secret1", i: 0, frame: 100000, flag: ""}).error, /Bad mark/);
-assert.match(post({op: "mark", code: "secret1", i: 0, frame: 5, flag: "nope"}).error, /Unknown flag/);
-assert.ok(post({op: "mark", code: "secret1", i: 0, frame: 50, flag: "", action_label: "=Tighten bolt!"}).ok);
+assert.match(post({op: "mark", name: "Test Person", code: CODE, i: 0, frame: null, flag: ""}).error, /Bad mark/);
+assert.match(post({op: "mark", name: "Test Person", code: CODE, i: 0, frame: 100000, flag: ""}).error, /Bad mark/);
+assert.match(post({op: "mark", name: "Test Person", code: CODE, i: 0, frame: 5, flag: "nope"}).error, /Unknown flag/);
+assert.ok(post({op: "mark", name: "Test Person", code: CODE, i: 0, frame: 50, flag: "", action_label: "=Tighten bolt!"}).ok);
 const A = book.tabs.annotations.data, H = A[0];
 assert.strictEqual(A.length, 2);
 const clip = items[0].c, ver = items[0].v === "o" ? "original" : "synthesized", other = ver === "original" ? "synthesized" : "original";
@@ -140,15 +143,15 @@ assert.strictEqual(A[1][H.indexOf(`annotation_${ver}_s`)], Math.round(50 / fps *
 assert.strictEqual(A[1][H.indexOf(`annotated_action_${ver}`)], "Tighten bolt");
 assert.strictEqual(A[1][H.indexOf(`annotation_${other}_frame`)], "");
 assert.strictEqual(A[1][H.indexOf(`annotated_action_${other}`)], "");
-assert.strictEqual(post({op: "session", code: "secret1"}).position, 1);
-assert.strictEqual(post({op: "item", code: "secret1", i: 0}).action_label, "Tighten bolt");
+assert.strictEqual(post({op: "session", name: "Test Person", code: CODE}).position, 1);
+assert.strictEqual(post({op: "item", name: "Test Person", code: CODE, i: 0}).action_label, "Tighten bolt");
 
 const pair = items.findIndex((o, k) => k !== 0 && o.c === clip);
-assert.ok(post({op: "mark", code: "secret1", i: pair, frame: null, flag: "no_clear_end", action_label: clip[0]}).ok);
+assert.ok(post({op: "mark", name: "Test Person", code: CODE, i: pair, frame: null, flag: "no_clear_end", action_label: clip[0]}).ok);
 assert.strictEqual(A.length, 2, "both versions of a clip share one row");
 assert.strictEqual(A[1][H.indexOf(`flag_${other}`)], "no_clear_end");
 assert.strictEqual(A[1][H.indexOf(`annotated_action_${other}`)], clip[0]);
-assert.ok(post({op: "mark", code: "secret1", i: 0, frame: 60, flag: ""}).ok);
+assert.ok(post({op: "mark", name: "Test Person", code: CODE, i: 0, frame: 60, flag: ""}).ok);
 assert.strictEqual(A.length, 2);
 assert.strictEqual(A[1][H.indexOf(`annotation_${ver}_frame`)], 60);
 assert.strictEqual(A[1][H.indexOf(`annotated_action_${ver}`)], clip[0], "clearing the label returns to the filed action");
@@ -164,12 +167,11 @@ assert.strictEqual(csvLines().pop(), '"a,b","say ""hi""",plain');
 A.pop();
 
 // A second annotator gets a separate queue and row; re-running setup keeps results.
-const code2 = book.tabs.annotators.data[2][1];
-assert.ok(post({op: "mark", code: code2, i: 0, frame: 1, flag: ""}).ok);
+assert.ok(post({op: "mark", name: "Second", code: CODE, i: 0, frame: 1, flag: ""}).ok);
 assert.strictEqual(A.length, 3);
 vm.runInContext("setup()", ctx);
 assert.strictEqual(book.tabs.annotations.data.length, 3);
 assert.strictEqual(csvLines().length, 3, "re-running setup finds or recreates the csv with the results");
 assert.strictEqual(book.tabs.sessions.data.length, 3);
-assert.strictEqual(post({op: "session", code: "secret1"}).done, 2);
+assert.strictEqual(post({op: "session", name: "Test Person", code: CODE}).done, 2);
 console.log("all backend checks passed");

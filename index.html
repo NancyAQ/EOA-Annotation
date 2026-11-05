@@ -43,8 +43,9 @@
   <p>You will see short first-person videos of maintenance actions. For each one, find the frame where the named action is <b>physically finished</b>: the first frame where its goal is reached, for example the screw is fully tight or the plug is fully seated.</p>
   <p>Later movement doesn't count, such as the hand moving away or the camera looking around. Each video may or may not continue after the action ends, so judge what you see, not where the video stops.</p>
   <p>If the action named at the top is wrong, choose the right one from the list, or <b>Other</b> to type it, and mark the end of the action you actually see.</p>
-  <p class="muted">Controls: <kbd>Space</kbd> play or pause, <kbd>←</kbd> <kbd>→</kbd> one frame, <kbd>Shift</kbd>+<kbd>←</kbd> <kbd>→</kbd> ten frames, <kbd>M</kbd> mark this frame, <kbd>Enter</kbd> save and go to the next video. Your progress saves after every video, so you can stop and come back with the same code.</p>
-  <p><input id="name" placeholder="Your access code" autocomplete="off" aria-label="Your access code"><button class="primary" id="begin">Start or resume</button></p>
+  <p class="muted">Controls: <kbd>Space</kbd> play or pause, <kbd>←</kbd> <kbd>→</kbd> one frame, <kbd>Shift</kbd>+<kbd>←</kbd> <kbd>→</kbd> ten frames, <kbd>M</kbd> mark this frame, <kbd>Enter</kbd> save and go to the next video. Your progress saves after every video, so you can stop and come back later. Use your full name and type it the same way each time.</p>
+  <p><input id="name" placeholder="Your full name" autocomplete="name" aria-label="Your full name"></p>
+  <p><input id="code" placeholder="Access code" autocomplete="off" aria-label="Access code"><button class="primary" id="begin">Start or resume</button></p>
   <p id="starterr" role="alert"></p>
 </section>
 
@@ -88,7 +89,7 @@
 <script>
 const $ = id => document.getElementById(id);
 const v = $("v"), slider = $("slider");
-let code = "", item = null, frame = 0, markFrame = null, flag = "", dirty = false;
+let annotatorName = "", code = "", item = null, frame = 0, markFrame = null, flag = "", dirty = false;
 let seeking = false, pendingFrame = null, markOnPause = false, actionLabel = "", saving = false;
 const OTHER = "__other";
 const SPEEDS = [1, 0.5, 0.25];
@@ -96,7 +97,7 @@ const SPEEDS = [1, 0.5, 0.25];
 // text/plain keeps this a simple request: the Apps Script backend cannot answer a CORS preflight.
 async function api(op, body) {
   const r = await fetch(window.EOA_CONFIG.backend, {method: "POST", headers: {"Content-Type": "text/plain;charset=utf-8"},
-                                                    body: JSON.stringify({op, code, ...body})});
+                                                    body: JSON.stringify({op, name: annotatorName, code, ...body})});
   const data = await r.json();
   if (data.error) throw new Error(data.error);
   return data;
@@ -322,7 +323,8 @@ document.addEventListener("keydown", e => {
 
 async function begin() {
   try {
-    code = $("name").value.trim();
+    annotatorName = $("name").value.trim();
+    code = $("code").value.trim();
     $("starterr").textContent = "Checking...";
     const s = await api("session", {});
     driveKey = s.drive_key;
@@ -334,7 +336,7 @@ async function begin() {
   } catch (e) { $("starterr").textContent = e.message; }
 }
 $("begin").onclick = begin;
-$("name").addEventListener("keydown", e => { if (e.key === "Enter") begin(); });
+for (const id of ["name", "code"]) $(id).addEventListener("keydown", e => { if (e.key === "Enter") begin(); });
 </script>
 </body>
 </html>

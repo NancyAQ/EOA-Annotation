@@ -1,8 +1,8 @@
 /**
  * Backend of the end-of-action annotation site. Paste into the Apps Script project of the results Google Sheet.
  *
- * Tabs: key (clip table and Drive file ids, built by setup), annotators (name, code; you fill these in),
- * sessions (each annotator's shuffled queue and marks), annotations (the results, one row per annotator and clip).
+ * Tabs: key (clip table and Drive file ids, built by setup), sessions (each annotator's shuffled queue and marks),
+ * annotations (the results, one row per annotator and clip).
  * After every mark the annotations tab is also written to annotations.csv in Drive, next to extensions.csv.
  * The page only ever receives the action name, timing and a Drive file id: never the clip name or version.
  */
@@ -11,6 +11,8 @@
 const ROOT_FOLDER_ID = "PASTE_DRIVE_FOLDER_ID_HERE";
 // Paste the Google Cloud API key restricted to the Drive API and this site's address. The page needs it to fetch videos.
 const DRIVE_API_KEY = "PASTE_API_KEY_HERE";
+// Choose one code and give it to every annotator. The site is public, so this keeps strangers away from the videos and results.
+const ACCESS_CODE = "PASTE_ACCESS_CODE_HERE";
 
 const KEY_COLUMNS = ["clip_id", "action", "original_path", "synthesized_path", "original_end_s", "new_end_s", "extension_s",
                      "original_end_frame", "new_end_frame", "fps_exact", "original_file_id", "synthesized_file_id"];
@@ -46,7 +48,6 @@ function setup() {
   });
   if (missing.length) throw new Error(`${missing.length} videos are not in Drive yet, nothing was changed: ${missing.join(", ")}`);
   writeTab_(tab_(ss, "key"), KEY_COLUMNS, rows);
-  ensureTab_(ss, "annotators", ["name", "code"]);
   ensureTab_(ss, "sessions", ["annotator", "created", "items"]);
   ensureTab_(ss, "annotations", COLUMNS);
   const csvName = "annotations.csv";
@@ -55,17 +56,6 @@ function setup() {
   PropertiesService.getScriptProperties().setProperty("ANNOTATIONS_CSV_ID", out.getId());
   writeCsv_(ss);
   Logger.log(`Key built: ${rows.length} clips.`);
-}
-
-/** Fills in a random access code for every annotator name that has none. */
-function makeCodes() {
-  const sheet = SpreadsheetApp.getActive().getSheetByName("annotators");
-  const values = sheet.getDataRange().getValues();
-  for (let r = 1; r < values.length; r++) {
-    if (String(values[r][0]).trim() && !String(values[r][1]).trim()) {
-      sheet.getRange(r + 1, 2, 1, 1).setValues([[Utilities.getUuid().replace(/-/g, "").slice(0, 10)]]);
-    }
-  }
 }
 
 function walkFolder_(folder, path, files) {
@@ -119,9 +109,9 @@ function doPost(e) {
 
 function handle_(body) {
   const ss = SpreadsheetApp.getActive();
-  const annotator = annotatorOf_(ss, body.code);
   const clips = loadKey_(ss);
-  const session = loadSession_(ss, annotator, clips);
+  const session = loadSession_(ss, annotatorOf_(body.name, body.code), clips);
+  const annotator = session.annotator;
   const items = session.items;
   if (body.op === "session") {
     const isDone = it => it.f !== null || Boolean(it.g);
@@ -159,13 +149,12 @@ function handle_(body) {
   throw new Error("Unknown request");
 }
 
-function annotatorOf_(ss, code) {
-  code = String(code || "").trim();
-  if (!code) throw new Error("Enter your access code");
-  const row = ss.getSheetByName("annotators").getDataRange().getValues().slice(1)
-    .find(r => String(r[1]).trim() === code && String(r[0]).trim());
-  if (!row) throw new Error("That access code is not valid");
-  return String(row[0]).trim();
+function annotatorOf_(name, code) {
+  if (String(code || "").trim() !== ACCESS_CODE) throw new Error("That access code is not valid");
+  const clean = String(name || "").replace(/[^\p{L}\p{M}\p{N}_ '.-]+/gu, " ").replace(/\s+/g, " ")
+    .replace(/^[ '.-]+|[ '.-]+$/g, "").slice(0, 40);
+  if (!clean) throw new Error("Enter your name");
+  return clean;
 }
 
 function loadKey_(ss) {
@@ -183,7 +172,10 @@ function loadSession_(ss, annotator, clips) {
   const sheet = ss.getSheetByName("sessions");
   const values = sheet.getDataRange().getValues();
   for (let r = 1; r < values.length; r++) {
-    if (values[r][0] === annotator) return {annotator, row: r + 1, items: JSON.parse(values[r][2])};
+    // Capitals don't matter, so "nancy" resumes the session "Nancy" started.
+    if (String(values[r][0]).toLowerCase() === annotator.toLowerCase()) {
+      return {annotator: String(values[r][0]), row: r + 1, items: JSON.parse(values[r][2])};
+    }
   }
   const items = buildQueue_(Object.keys(clips).sort());
   sheet.appendRow([annotator, new Date().toISOString().slice(0, 19), JSON.stringify(items)]);

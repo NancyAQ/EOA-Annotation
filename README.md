@@ -23,24 +23,20 @@ You need a Drive folder containing `extensions.csv` and the action folders (`<Ac
 4. Edit the key. Under **Application restrictions**, choose **Websites** and add `https://<your-github-name>.github.io/*`. Under **API restrictions**, choose **Google Drive API**.
 
 ### 2. Set up the backend
-1. Create a Google Sheet for the results. Keep it private, because it holds the clip key and the access codes.
+1. Create a Google Sheet for the results. Keep it private, because it holds the clip key.
 2. In the Sheet, open **Extensions > Apps Script** and replace the contents with `apps_script/Code.gs`.
-3. At the top of the script, fill in `ROOT_FOLDER_ID` and `DRIVE_API_KEY`. These stay in Apps Script and don't go back into this repository.
+3. At the top of the script, fill in `ROOT_FOLDER_ID`, `DRIVE_API_KEY` and `ACCESS_CODE`, a code you choose for all annotators. These stay in Apps Script and don't go back into this repository.
 4. Select `setup` in the toolbar and click **Run**. Approve the permissions; Google warns that the app is unverified, so choose **Advanced**, then continue. If any videos are missing from Drive, the error lists them and nothing changes.
 
-### 3. Add annotators
-1. In the `annotators` tab, put each person's name in column A, below the header.
-2. Run `makeCodes` to fill in an access code for each name.
-3. Send each person the site address and their own code.
-
-Run `makeCodes` again whenever you add someone.
-
-### 4. Deploy
+### 3. Deploy
 1. In Apps Script, choose **Deploy > New deployment > Web app**. Set **Execute as** to **Me** and **Who has access** to **Anyone**.
 2. Copy the web app URL into `config.js`, then commit and push.
 3. In the GitHub repository, go to **Settings > Pages** and deploy from the `main` branch, `/ (root)` folder.
 
 The site appears at `https://<your-github-name>.github.io/<repository>/`.
+
+### 4. Invite annotators
+Send each person the site address and the access code. They type their own name on the start page, and a new name starts a new session.
 
 ## Results
 
@@ -65,6 +61,7 @@ Frames count from 0. The page shows frames counting from 1, so frame 12 on scree
 
 ## Limits
 
+- **Names:** the name is how an annotator resumes, ignoring capitals. Two people who type the same name share one session and overwrite each other's marks, and a different spelling starts a new session, so ask for full names.
 - **Blinding:** an annotator who opens the browser's developer tools can see a video's Drive file id, and opening that file in Drive shows its name. Don't give annotators the Drive folder link.
 - **Who can get the videos:** the Drive API key only reads files shared with "Anyone with the link", so anyone with that link or a file id can also download them.
 - **Download size:** each video downloads in full before it plays, about 39 MB on average, or about 4.3 GB per annotator for the 110-video set.
