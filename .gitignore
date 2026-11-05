@@ -1,0 +1,9 @@
+# Code only: clips, tables and keys never go in this repository.
+*.mp4
+*.MP4
+*.mkv
+*.csv
+*.xlsx
+*key*.json
+*drive_ids*
+sessions/
