@@ -46,12 +46,12 @@ const folder = (name, subs = [], files = []) => {
 };
 
 const FPS = {A: "25/1", B: "30000/1001"};
-function driveTree(omit) {
+function batch(name, start, omit) {
   let csv = "action,clip_id,original_path,synthesized_path,original_end_s,new_end_s,extension_s,original_end_frame,new_end_frame,fps,fps_exact\n";
   const actions = [];
   for (const a of ["A", "B"]) {
     const o = [], s = [];
-    for (let k = 0; k < 5; k++) {
+    for (let k = start; k < start + 5; k++) {
       const stem = `000${k}`;
       csv += `${a},${a}/${stem},D:\\x\\${stem}.MP4,D:\\x\\${stem}_synthesized.mp4,4,10,6,99,249,25,${FPS[a]}\n`;
       o.push(file(`${stem}.MP4`, `id-${a}${k}-o`));
@@ -60,10 +60,15 @@ function driveTree(omit) {
     actions.push(folder(a, [folder(`original ${a}`, [], o), folder(`synthesized ${a}`, [], s)]));
   }
   const work = folder("_work", [], [file("0000_synthesized.mp4", "must-not-be-used")]);
-  return folder("EOA", [folder("MAS_extended", actions.concat(work), [file("extensions.csv", "csv", csv)])]);
+  return folder(name, actions.concat(work), [file("extensions.csv", `csv-${name}`, csv)]);
+}
+function driveTree(omit, second) {
+  return folder("EOA", [batch("MAS_extended", 0, omit)].concat(second ? [batch("MAS_extended_batch2", 5, omit)] : []));
 }
 
-function load(book, tree) {
+function load(book, tree, showOriginals = true) {
+  const source = fs.readFileSync(path.join(__dirname, "..", "apps_script", "Code.gs"), "utf8");
+  assert.ok(source.includes("const SHOW_ORIGINALS = false;"), "the deployed setting hides originals");
   const props = {};
   const ctx = vm.createContext({
     console,
@@ -75,7 +80,7 @@ function load(book, tree) {
     Utilities: {parseCsv: t => t.trim().split("\n").map(l => l.split(",")), getUuid: () => "abcdef12-3456-7890-abcd-ef1234567890"},
     ContentService: {MimeType: {JSON: "json"}, createTextOutput: s => ({setMimeType: () => s})},
   });
-  vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "apps_script", "Code.gs"), "utf8"), ctx);
+  vm.runInContext(source.replace("const SHOW_ORIGINALS = false;", `const SHOW_ORIGINALS = ${showOriginals};`), ctx);
   return ctx;
 }
 
@@ -86,7 +91,10 @@ assert.throws(() => vm.runInContext("setup()", ctx), /1 videos are not in Drive 
 assert.strictEqual(book.getSheetByName("key"), null, "a failed setup must change nothing");
 
 ctx = load(book, driveTree());
-const post = body => JSON.parse(vm.runInContext("doPost", ctx)({postData: {contents: JSON.stringify(body)}}));
+const rawPost = body => JSON.parse(vm.runInContext("doPost", ctx)({postData: {contents: JSON.stringify(body)}}));
+// Like the page: a mark carries the file id of the video it was made on.
+const post = body => rawPost(body.op === "mark" && !("file_id" in body)
+  ? {...body, file_id: rawPost({op: "item", name: body.name, code: body.code, i: body.i}).file_id} : body);
 vm.runInContext("setup()", ctx);
 assert.strictEqual(book.tabs.key.data.length, 11);
 const keyHead = book.tabs.key.data[0];
@@ -174,4 +182,68 @@ assert.strictEqual(book.tabs.annotations.data.length, 3);
 assert.strictEqual(csvLines().length, 3, "re-running setup finds or recreates the csv with the results");
 assert.strictEqual(book.tabs.sessions.data.length, 3);
 assert.strictEqual(post({op: "session", name: "Test Person", code: CODE}).done, 2);
+// A later batch: its folder sits beside the first; nothing is added until all of it is in Drive.
+const marksBefore = JSON.parse(book.tabs.sessions.data[1][2]).filter(it => it.f !== null || it.g);
+const clipsBefore = book.tabs.key.data.length;
+ctx = load(book, driveTree("A/0007", true));
+assert.throws(() => vm.runInContext("setup()", ctx), /1 videos are not in Drive yet.*A\/0007 synthesized/s);
+assert.strictEqual(book.tabs.key.data.length, clipsBefore, "an incomplete batch must change nothing");
+
+ctx = load(book, driveTree(undefined, true));
+vm.runInContext("setup()", ctx);
+assert.strictEqual(book.tabs.key.data.length, 21);
+assert.strictEqual(book.tabs.annotations.data.length, 3, "results survive adding a batch");
+s = post({op: "session", name: "Test Person", code: CODE});
+assert.strictEqual(s.total, 40, "a started session gains the new clips");
+assert.strictEqual(s.done, 2, "and keeps its marks");
+const grown = JSON.parse(book.tabs.sessions.data[1][2]);
+assert.deepStrictEqual(grown.filter(it => it.f !== null || it.g), marksBefore);
+assert.deepStrictEqual(new Set(grown.slice(0, 20).map(it => it.c)).size, 10, "the first batch keeps its places");
+const batch2 = grown.slice(20);
+assert.ok(batch2.every(it => Number(it.c.split("/")[1]) >= 5), "new clips go to the end");
+assert.strictEqual(new Set(batch2.map(it => it.c + it.v)).size, 20);
+batch2.forEach((it, i) => assert.ok(Math.abs(i - batch2.findIndex((o, k) => k !== i && o.c === it.c)) >= 3));
+assert.strictEqual(post({op: "session", name: "Test Person", code: CODE}).total, 40, "growing happens once");
+assert.strictEqual(book.tabs.sessions.data.length, 3);
+assert.match(post({op: "item", name: "Test Person", code: CODE, i: 39}).file_id, /^id-[AB][5-9]-[os]$/);
+assert.ok(post({op: "mark", name: "Test Person", code: CODE, i: 39, frame: 3, flag: ""}).ok);
+assert.strictEqual(post({op: "session", name: "Brand New", code: CODE}).total, 40, "a new annotator gets both batches");
+
+// Originals hidden, the deployed setting: started sessions keep everything stored but see only synthesized videos.
+ctx = load(book, driveTree(undefined, true), false);
+vm.runInContext("setup()", ctx);  // the stand-in's script properties do not persist between loads, unlike Apps Script's
+const storedBefore = book.tabs.sessions.data[1][2];
+const stored = JSON.parse(storedBefore), synth = stored.filter(it => it.v === "s");
+s = post({op: "session", name: "Test Person", code: CODE});
+assert.strictEqual(s.total, 20, "only the synthesized videos are numbered");
+assert.strictEqual(s.done, synth.filter(it => it.f !== null || it.g).length, "done counts synthesized marks only");
+assert.strictEqual(s.position, synth.findIndex(it => it.f === null && !it.g));
+assert.strictEqual(book.tabs.sessions.data[1][2], storedBefore, "hiding originals changes nothing stored");
+for (let i = 0; i < 20; i++) {
+  assert.strictEqual(post({op: "item", name: "Test Person", code: CODE, i}).file_id, `id-${synth[i].c.replace("/000", "")}-s`);
+}
+assert.match(post({op: "item", name: "Test Person", code: CODE, i: 20}).error, /No such/);
+// A page opened before the switch numbers videos differently: its save is refused, not filed under another clip.
+assert.match(rawPost({op: "mark", name: "Test Person", code: CODE, i: 0, frame: 1, flag: ""}).error, /reload/);
+assert.match(rawPost({op: "mark", name: "Test Person", code: CODE, i: 0, frame: 1, flag: "", file_id: "id-A0-o"}).error, /reload/);
+assert.strictEqual(book.tabs.sessions.data[1][2], storedBefore, "a refused save changes nothing");
+// A clip whose original was annotated earlier keeps those columns when its synthesized video is marked.
+const rowsBefore = book.tabs.annotations.data.length;
+const at = synth.findIndex(it => it.c === clip);
+assert.ok(post({op: "mark", name: "Test Person", code: CODE, i: at, frame: 7, flag: ""}).ok);
+const AN = book.tabs.annotations.data, row = AN.find(r => r[0] === "Test Person" && r[2] === clip);
+assert.strictEqual(AN.length, rowsBefore, "same row as before");
+assert.strictEqual(row[H.indexOf("annotation_synthesized_frame")], 7);
+if (ver === "original") assert.strictEqual(row[H.indexOf("annotation_original_frame")], 60);
+else assert.strictEqual(row[H.indexOf("flag_original")], "no_clear_end");
+// A new annotator gets synthesized videos only; their rows leave the original columns empty.
+s = post({op: "session", name: "Third", code: CODE});
+assert.strictEqual(s.total, 20);
+const third = JSON.parse(book.tabs.sessions.data.find(r => r[0] === "Third")[2]);
+assert.ok(third.length === 20 && third.every(it => it.v === "s"));
+assert.ok(post({op: "mark", name: "Third", code: CODE, i: 0, frame: 2, flag: ""}).ok);
+const r3 = book.tabs.annotations.data.find(r => r[0] === "Third");
+assert.deepStrictEqual(["annotation_original_frame", "annotation_original_s", "annotated_action_original", "flag_original"].map(k => r3[H.indexOf(k)]), ["", "", "", ""]);
+assert.strictEqual(r3[H.indexOf("annotation_synthesized_frame")], 2);
+assert.strictEqual(written["csv-out"].trim().split("\r\n").length, book.tabs.annotations.data.length);
 console.log("all backend checks passed");

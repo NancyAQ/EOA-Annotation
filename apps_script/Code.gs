@@ -5,6 +5,8 @@
  * annotations (the results, one row per annotator and clip).
  * After every mark the annotations tab is also written to annotations.csv in Drive, next to extensions.csv.
  * The page only ever receives the action name, timing and a Drive file id: never the clip name or version.
+ * While SHOW_ORIGINALS is false annotators see only the synthesized videos; marks already made on originals stay stored
+ * and keep their columns.
  */
 
 // Paste the id of the Drive folder that holds extensions.csv and the action folders (or a folder above it).
@@ -21,22 +23,27 @@ const COLUMNS = ["annotator", "action", "clip_id", "original_path", "synthesized
                  "annotation_synthesized_frame", "annotated_action_original", "annotated_action_synthesized", "flag_original",
                  "flag_synthesized", "annotated_at"];
 const FLAGS = ["", "no_clear_end", "video_problem"];
+// false: annotators see only the synthesized videos. true: both versions, kept apart in the queue.
+const SHOW_ORIGINALS = false;
 
 // ---------------------------------------------------------------- setup, run by hand from the Apps Script editor
 
-/** Builds the key tab from extensions.csv and the Drive folders. Safe to re-run: sessions and results are kept. */
+/**
+ * Builds the key tab from every extensions.csv under the Drive folder, so a new batch only needs its own folder uploaded
+ * next to the others. Safe to re-run: sessions and results are kept.
+ */
 function setup() {
   const ss = SpreadsheetApp.getActive();
   const files = {};
   walkFolder_(DriveApp.getFolderById(ROOT_FOLDER_ID), "", files);
-  const csvPath = Object.keys(files).find(p => p.endsWith("/extensions.csv"));
-  if (!csvPath) throw new Error("extensions.csv not found under the Drive folder");
-  const table = Utilities.parseCsv(files[csvPath].getBlob().getDataAsString("UTF-8"));
-  const head = table[0];
+  const csvPaths = Object.keys(files).filter(p => p.endsWith("/extensions.csv")).sort();
+  if (!csvPaths.length) throw new Error("extensions.csv not found under the Drive folder");
+  const csvPath = csvPaths[0];  // annotations.csv stays next to the first batch's table
+  const tables = csvPaths.map(p => Utilities.parseCsv(files[p].getBlob().getDataAsString("UTF-8")));
   const rows = [], missing = [];
-  table.slice(1).forEach(values => {
+  tables.forEach(table => table.slice(1).forEach(values => {
     const r = {};
-    head.forEach((h, i) => { r[h] = values[i]; });
+    table[0].forEach((h, i) => { r[h] = values[i]; });
     const ids = ["original", "synthesized"].map(version => {
       const name = String(r[version + "_path"]).split(/[\\/]/).pop();
       const tail = `/${r.action}/${version} ${r.action}/${name}`;
@@ -45,7 +52,7 @@ function setup() {
       return hit.length === 1 ? files[hit[0]].getId() : "";
     });
     rows.push(KEY_COLUMNS.map(c => c === "original_file_id" ? ids[0] : c === "synthesized_file_id" ? ids[1] : r[c]));
-  });
+  }));
   if (missing.length) throw new Error(`${missing.length} videos are not in Drive yet, nothing was changed: ${missing.join(", ")}`);
   writeTab_(tab_(ss, "key"), KEY_COLUMNS, rows);
   ensureTab_(ss, "sessions", ["annotator", "created", "items"]);
@@ -112,7 +119,8 @@ function handle_(body) {
   const clips = loadKey_(ss);
   const session = loadSession_(ss, annotatorOf_(body.name, body.code), clips);
   const annotator = session.annotator;
-  const items = session.items;
+  // Hidden items stay in session.items untouched; the page numbers only the ones it may show.
+  const items = SHOW_ORIGINALS ? session.items : session.items.filter(it => it.v === "s");
   if (body.op === "session") {
     const isDone = it => it.f !== null || Boolean(it.g);
     const position = items.findIndex(it => !isDone(it));
@@ -133,6 +141,8 @@ function handle_(body) {
             flag: item.g, action_label: item.a, file_id: clip[version + "_file_id"]};
   }
   if (body.op === "mark") {
+    // A page opened before the list changed numbers the videos differently: refuse rather than file the mark under another clip.
+    if (body.file_id !== clip[version + "_file_id"]) throw new Error("The list of videos has changed. Please reload the page.");
     const frame = body.frame === null || body.frame === undefined ? null : Number(body.frame);
     const flag = body.flag || "";
     if (!FLAGS.includes(flag)) throw new Error(`Unknown flag ${flag}`);
@@ -174,7 +184,15 @@ function loadSession_(ss, annotator, clips) {
   for (let r = 1; r < values.length; r++) {
     // Capitals don't matter, so "nancy" resumes the session "Nancy" started.
     if (String(values[r][0]).toLowerCase() === annotator.toLowerCase()) {
-      return {annotator: String(values[r][0]), row: r + 1, items: JSON.parse(values[r][2])};
+      const session = {annotator: String(values[r][0]), row: r + 1, items: JSON.parse(values[r][2])};
+      // Clips from a later batch join the end of a session already under way; earlier marks stay as they are.
+      const have = new Set(session.items.map(it => it.c));
+      const added = Object.keys(clips).filter(c => !have.has(c)).sort();
+      if (added.length) {
+        session.items = session.items.concat(buildQueue_(added));
+        saveSession_(ss, session);
+      }
+      return session;
     }
   }
   const items = buildQueue_(Object.keys(clips).sort());
@@ -194,9 +212,17 @@ function shuffle_(a) {
   return a;
 }
 
-/** One version of every clip in the first half, the other in the second. Which comes first is balanced. */
+function queueItem_(c, v) {
+  return {c, v, f: null, g: "", a: "", t: null};
+}
+
+/**
+ * Synthesized versions only, shuffled, while originals are hidden. Otherwise one version of every clip in the first half
+ * and the other in the second; which comes first is balanced.
+ */
 function buildQueue_(clipIds) {
   const ids = shuffle_(clipIds.slice());
+  if (!SHOW_ORIGINALS) return ids.map(c => queueItem_(c, "s"));
   const originalFirst = {};
   ids.forEach((c, i) => { originalFirst[c] = i % 2 === 0; });
   const gap = Math.max(1, Math.floor(ids.length / 3));
@@ -205,8 +231,7 @@ function buildQueue_(clipIds) {
     const pos = {};
     a.forEach((c, i) => { pos[c] = i; });
     if (b.every((c, i) => a.length + i - pos[c] >= gap)) {
-      const make = (c, v) => ({c, v, f: null, g: "", a: "", t: null});
-      return a.map(c => make(c, originalFirst[c] ? "o" : "s")).concat(b.map(c => make(c, originalFirst[c] ? "s" : "o")));
+      return a.map(c => queueItem_(c, originalFirst[c] ? "o" : "s")).concat(b.map(c => queueItem_(c, originalFirst[c] ? "s" : "o")));
     }
   }
   throw new Error("Could not build an order that keeps the two versions apart");
@@ -226,7 +251,8 @@ function upsertAnnotation_(ss, session, clip) {
                extension_s: clip.extension_s};
   const stamps = [];
   [["original", "o"], ["synthesized", "s"]].forEach(([version, v]) => {
-    const m = session.items.find(it => it.c === clip.clip_id && it.v === v);
+    // Sessions started with originals hidden have no original item: those columns stay empty.
+    const m = session.items.find(it => it.c === clip.clip_id && it.v === v) || queueItem_(clip.clip_id, v);
     const marked = m.f !== null || Boolean(m.g);
     row[`annotation_${version}_frame`] = m.f === null ? "" : m.f;
     row[`annotation_${version}_s`] = m.f === null ? "" : Math.round(m.f * den / num * 1000) / 1000;

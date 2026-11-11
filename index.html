@@ -211,7 +211,7 @@ v.addEventListener("error", () => {
 $("retry").onclick = () => load(item.i).catch(e => { $("err").textContent = e.message; });
 
 async function save() {
-  await api("mark", {i: item.i, frame: markFrame, flag, action_label: actionLabel});
+  await api("mark", {i: item.i, file_id: item.file_id, frame: markFrame, flag, action_label: actionLabel});
   dirty = false;
 }
 async function goNext() {
